@@ -16,7 +16,7 @@ end
 
 trueodeprob = ODEProblem(spiral, u0, tspan);
 ode_data = Array(solve(trueodeprob, Tsit5(), saveat = tsteps));
-y_train = ode_data[:, 1:50];
+y_train = ode_data[:, 1:50] + 0.5 * randn(2,50);
 
 dudt2 = FastChain(FastDense(2, 50, tanh),
                   FastDense(50, 2))
@@ -42,10 +42,11 @@ end
 ### Fit neural ode to the data
 @everywhere @model function fit_node(data)
     σ ~ InverseGamma(2, 3)
-    p ~ MvNormal(pmin_spiral, 0.1)
+    p ~ MvNormal(pmin_spiral, 1.0)
     # Calculate predictions for the inputs given the params.
     predicted = train_prob(u0, p)
     # observe each prediction.
+
     for i = 1:size(predicted,2)
         data[:,i] ~ MvNormal(predicted[:,i], σ)
     end
@@ -53,9 +54,9 @@ end
 
 @everywhere model = fit_node(y_train); # fit model to average simulated data
 
-function perform_inference(lr, alpha, samplesize, pmin, num_chains)
-    alg = SGHMC(learning_rate=lr, momentum_decay=alpha)
-    chain = sample(model, alg, MCMCThreads(), samplesize, num_chains, progress=true);
+function perform_inference(samplesize, pmin, num_chains)
+    alg = SGHMC(; learning_rate = 0.1, )
+    chain = sample(model, alg, MCMCDistributed(), samplesize, num_chains, progress=true);
     return chain
 end
 
@@ -82,7 +83,7 @@ end
 using JLD
 pinit = initial_params(dudt2);
 opt = DiffEqFlux.sciml_train(loss, train_prob.p, ADAM(0.05), maxiters = 1500)
-
+# opt = DiffEqFlux.sciml_train(loss, pmin_spiral, BFGS(), maxiters = 1500)
 
 pmin = opt.minimizer;
 save("pmin_spiral.jld", "pmin_spiral", pmin)
@@ -149,11 +150,10 @@ end
 
 ## ---------------------------------------------------
 #
-samples = 750
+samples = 2000
 
-lr = 1.0e-6; md = 0.15;
-num_chains = 6;
-chain = perform_inference(lr, md, samples, pmin, num_chains);
+num_chains = 4;
+chain = perform_inference(samples, pmin, num_chains);
 for i in 1:num_chains
     losses = map_loss(chain[:,:,i])
     pl = plot(1:samples, losses); display(pl)
@@ -162,3 +162,5 @@ for i in 1:num_chains
     savefig(pl_ch, string("spiral_", lr, "_", md, "_", samples, "_", "chain_", i+4, "_predictions", ".png"))
     savefig(pl2, string("spiral_", lr, "_", md, "_", samples, "_", "chain_", i+4, "_contour", ".png"))
 end
+
+rand(MvNormal(pmin_spiral, 0.1))

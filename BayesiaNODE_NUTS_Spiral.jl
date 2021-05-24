@@ -2,7 +2,7 @@ cd("C:/Users/16174/Desktop/Julia Lab/Bayesian Neural ODE")
 Pkg.activate(".")
 
 using DiffEqFlux, OrdinaryDiffEq, Flux, Optim, Plots, AdvancedHMC
-using JLD, StatsPlots
+using JLD, StatsPlots, Turing
 
 u0 = [2.0; 0.0]
 datasize = 40
@@ -15,7 +15,7 @@ function trueODEfunc(du, u, p, t)
 end
 
 prob_trueode = ODEProblem(trueODEfunc, u0, tspan)
-ode_data = Array(solve(prob_trueode, Tsit5(), saveat = tsteps))
+ode_data = Array(solve(prob_trueode, Tsit5(), saveat = tsteps)) + 0.5 * randn(2,datasize)
 
 
 ####DEFINE THE NEURAL ODE#####
@@ -86,6 +86,19 @@ prediction = predict_neuralode(samples[idx])
 plot!(tsteps,prediction[1,:], color = :black, w = 2, label = "")
 plot!(tsteps,prediction[2,:], color = :black, w = 2, label = "Best fit prediction", ylims = (-2.5, 3.5))
 
+
+
+model = @model function fit_node(data)
+    σ ~ InverseGamma(2, 3)
+    p ~ MvNormal(prob_neuralode.p, 1.0)
+    # Calculate predictions for the inputs given the params.
+    predicted = predict_neuralode(p)
+    # observe each prediction.
+
+    data ~ arraydist([MvNormal(predicted[:, i], σ) for i in 1:size(predicted, 2)])
+end
+
+chain = sample(model(ode_data), NUTS(0.65), 1000)
 
 ################################CONTOUR PLOTS##########################
 pl = scatter(ode_data[1,:], ode_data[2,:], color = :red, label = "Data",  xlabel = "Var1", ylabel = "Var2", title = "Spiral Neural ODE")
