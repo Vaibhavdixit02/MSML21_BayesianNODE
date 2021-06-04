@@ -1,62 +1,78 @@
-using Distributed
-using DiffEqFlux, OrdinaryDiffEq, Flux, Optim, Turing, Serialization, Plots
-using JLD
+#cd("C:/Users/16174/Desktop/Julia Lab/Bayesian Neural ODE")
+#Pkg.activate(".")
 
+using DiffEqFlux, OrdinaryDiffEq, Flux, Optim, Plots, AdvancedHMC
+using JLD, StatsPlots, Distributions, Random
+
+Random.seed!(123)
 
 u0 = [2.0; 0.0]
-datasize = 60
-tspan = (0.0, 1.2)
+datasize = 40
+tspan = (0.0, 1)
 tsteps = range(tspan[1], tspan[2], length = datasize)
 
-function spiral(du, u, p, t)
+function trueODEfunc(du, u, p, t)
     true_A = [-0.1 2.0; -2.0 -0.1]
     du .= ((u.^3)'true_A)'
 end
 
+prob_trueode = ODEProblem(trueODEfunc, u0, tspan)
+mean_ode_data = Array(solve(prob_trueode, Tsit5(), saveat = tsteps))
+ode_data = mean_ode_data .+ 0.1 .* randn(size(mean_ode_data)..., 30)
 
-trueodeprob = ODEProblem(spiral, u0, tspan);
-ode_data = Array(solve(trueodeprob, Tsit5(), saveat = tsteps));
-y_train = ode_data[:, 1:50] + 0.5 * randn(2,50);
-
-dudt2 = FastChain(FastDense(2, 50, tanh),
+####DEFINE THE NEURAL ODE#####
+dudt2 = FastChain((x, p) -> x.^3,
+                  FastDense(2, 50, relu),
                   FastDense(50, 2))
+prob_neuralode = NeuralODE(dudt2, tspan, Tsit5(), saveat = tsteps)
 
-prob_node = NeuralODE(dudt2, tspan, Tsit5(), saveat = tsteps); #neural ode
-train_prob = NeuralODE(dudt2, (0., 1.0), Tsit5(), saveat = tsteps[1:50]);
-
-
-function predict_node(p)  # predict with given params
-    Array(train_prob(u0, p))
+function predict_neuralode(p)
+    Array(prob_neuralode(u0, p))
 end
 
-function loss(p)  # loss function to minimize
-    pred = predict_node(p)
-    return Float64(sum(abs2, y_train .- pred))
+function loss_neuralode(p)
+    pred = predict_neuralode(p)
+    loss = sum(abs2, ode_data .- pred)
+    return loss, pred
 end
 
+function l(θ)
+    lp = logpdf(MvNormal(zeros(length(θ) - 1), θ[end]), θ[1:end-1])
+    ll = -sum(abs2, ode_data .- predict_neuralode(θ[1:end-1]))
+    return lp + ll
+end
+function dldθ(θ)
+    x, lambda = Flux.Zygote.pullback(l,θ)
+    grad = first(lambda(1))
+    return x, grad
+end
+
+init = [Float64.(prob_neuralode.p); 1.0]
+opt = DiffEqFlux.sciml_train(x -> -l(x), init, ADAM(0.05), maxiters = 1500)
+pmin = opt.minimizer;
 
 ## -----------------------------
 ####### Perform inference
 
 
 ### Fit neural ode to the data
-@everywhere @model function fit_node(data)
+@model function fit_node(data)
     σ ~ InverseGamma(2, 3)
-    p ~ MvNormal(pmin_spiral, 1.0)
+    p ~ MvNormal(pmin, 1.0)
     # Calculate predictions for the inputs given the params.
-    predicted = train_prob(u0, p)
+    predicted = predict_neuralode(p)
     # observe each prediction.
 
-    for i = 1:size(predicted,2)
-        data[:,i] ~ MvNormal(predicted[:,i], σ)
+    ThreadsX.map(1:30) do i
+        data[:,:,i] ~ MvNormal(predicted, σ)
     end
 end
 
-@everywhere model = fit_node(y_train); # fit model to average simulated data
+model = fit_node(ode_data); # fit model to average simulated data
 
 function perform_inference(samplesize, pmin, num_chains)
-    alg = SGHMC(; learning_rate = 0.1, )
-    chain = sample(model, alg, MCMCDistributed(), samplesize, num_chains, progress=true);
+    alg = SGHMC(; learning_rate = 0.01, momentum_decay = 0.1)
+    chain = sample(model, alg, MCMCThreads(), samplesize, num_chains, progress=true);
     return chain
 end
 
@@ -150,10 +166,10 @@ end
 
 ## ---------------------------------------------------
 #
-samples = 2000
+samples = 500
 
 num_chains = 4;
-chain = perform_inference(samples, pmin, num_chains);
+chain = perform_inference(samples, pmin, num_chains)
 for i in 1:num_chains
     losses = map_loss(chain[:,:,i])
     pl = plot(1:samples, losses); display(pl)

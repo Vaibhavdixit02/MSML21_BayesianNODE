@@ -70,6 +70,8 @@ scatter(losses, ylabel = "Loss",  label = "Architecture1: 500 warmup, 500 sample
 
 savefig("ExtendedLV_Loss_100_500_Arch1.pdf")
 
+d = load("LVNeuralODE_Architecture1_500_500_0.5.jld")
+idx, samples, losses, ode_data, prediction, tsteps, stats, mean_ode_data = values(d)
 ################################PLOT RETRODICTED DATA ##########################
 pl = scatter(tsteps, mean_ode_data[1,:], color = :red, label = "Data: Var1", title = "Lotka Volterra Neural ODE")
 scatter!(tsteps, mean_ode_data[2,:], color = :blue, label = "Data: Var2", xlabel = "t", ylims = (0, 10))
@@ -163,7 +165,7 @@ pl = scatter(
     mean_ode_data_f[2,:],
     color = :blue, label = "Data",  xlabel = "Var1",
     ylabel = "Var2", title = "Lotka Volterra  Neural ODE",
-    legend = (0.8, 0.95), legendfontsize = 5,
+    legend = (0.8, 0.95), legendfontsize = 10, size = (1200,800)
 )
 
 for k in 1:size(ode_data_f, 3)
@@ -185,6 +187,12 @@ for k1 in 301:500
     end
 end
 
+err_lv = zeros(200)
+for k1 in 301:500
+    prediction_f = predict_neuralode_f(samples[k1])
+    err_lv[k1-300] = sum(abs.((prediction_f[1,datasize+1:end] .- mean_ode_data_f[1,datasize+1:end])./mean_ode_data_f[1,datasize+1:end])) + sum(abs.((prediction_f[2,datasize+1:end] .- mean_ode_data_f[2,datasize+1:end])./mean_ode_data_f[2,datasize+1:end]))
+end
+
 plot!(prediction_f[1,1:datasize], prediction_f[2,1:datasize], color = :red, w = 2, label = "Training: simulated data")
 plot!(prediction_f[1,datasize+1:end], prediction_f[2,datasize+1:end], color = :green, w = 2, label = "Forecasting: simulated data")
 plot!(prediction_f[1,1:datasize], prediction_f[2,1:datasize], color = :black, w = 2, label = "Best fit prediction")
@@ -192,3 +200,9 @@ plot!(prediction_f[1,1:datasize], prediction_f[2,1:datasize], color = :black, w 
 savefig("ExtendedLV_Contour_Retrodicted_500_500_Arch2.pdf")
 
 save("LVNeuralODE_Architecture1_500_500_0.5.jld", "losses", losses, "ode_data", ode_data, "mean_ode_data", mean_ode_data, "samples", samples, "prediction", prediction, "stats", stats, "idx", idx, "tsteps", tsteps)
+
+samples = hcat(d["samples"]...)
+samples_reshape = reshape(map(first,samples), (500, 1, 1))
+Chain_Spiral = Chains(samples_reshape)
+plot(Chain_Spiral)
+autocorplot(Chain_Spiral; title = "Lotka Volterra ODE")
